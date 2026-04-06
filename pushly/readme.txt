@@ -2,9 +2,9 @@
 Contributors: pushlydev
 Tags: pushly, web push, web push notifications, push notifications
 Requires at least: 6.1
-Tested up to: 6.6
+Tested up to: 6.9
 Requires PHP: 5.6.20
-Stable tag: 2.1.9
+Stable tag: 2.1.11
 License: GPLv2 or later
 
 Take user engagement to a whole new level with an easy-to-use platform to engage audiences with targeted content after they leave your site.
@@ -43,3 +43,6 @@ We do this through push notifications that drive people directly to your site. P
 
 = 2.1.9 =
 * Adds Enabled Post Types setting to enable sending notifications for custom post types
+
+= 2.1.11 =
+* Fixed an issue where notifications were not sent on initial publish is some WordPress environments

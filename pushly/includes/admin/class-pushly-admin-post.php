@@ -326,17 +326,11 @@ class Pushly_Admin_Post {
 
 	/**
 	 * Determines if the post should create/update a notification and hooks/calls the appropriate
-	 * methods to invoke based on whether the request came from the Gutenberg, Rest API,
-	 * or Classic Editor.
+	 * methods to invoke based on whether the request came from a REST API or not.
 	 *
 	 * We will never act on posts that are moving from `trash` to published.
 	 * We will only act on posts that are in `publish` or `future` status. Posts in `future` status
-	 * wll have their post meta set but will not be sent until they move to `publish` status.
-	 *
-	 * Because of these duplicate requests we have to implement logic to only act one of the requests. We will
-	 * prefer to act on the Legacy request since more data is always available at that point. In order
-	 * to accomplish this we will use a metadata flag `pushly_needs_saving` to conditionally invoke
-	 * the desired method/hook only on the second request.
+	 * will have their post meta set but will not be sent until they move to `publish` status.
 	 *
 	 * @param string $new_status New Status
 	 * @param string $old_status Old Status
@@ -351,50 +345,22 @@ class Pushly_Admin_Post {
 			return;
 		}
 
-		if ( get_post_meta( $post->ID, 'pushly_needs_saving', true ) ) {
-			/**
-			 * The previous request flagged that the request should be treated as a publish request (likely
-			 * we're using Gutenberg and request to post.php was made after the REST API), do this now.
-			 */
-			delete_post_meta( $post->ID, 'pushly_needs_saving' );
+		if ( ! in_array( $new_status, [ 'publish', 'future' ] ) ) {
+			return;
+		}
+
+		/**
+		 * Simplified routing logic:
+		 * - REST requests (including Gutenberg): Use rest_after_insert_* which fires after metadata is saved
+		 * - Classic editor: Use wp_insert_post which has metadata available immediately
+		 *
+		 * Since all Pushly meta fields are registered with 'show_in_rest' => true, they are available
+		 * in the REST request and we don't need to wait for a second "legacy" request.
+		 */
+		if ( defined( 'REST_REQUEST' ) && REST_REQUEST ) {
+			add_action( "rest_after_insert_{$post->post_type}", [ $this, 'save_notification_from_post' ], 99, 2 );
+		} else {
 			add_action( 'wp_insert_post', [ $this, 'save_notification_from_post_id' ], 999 );
-		} else if ( in_array( $new_status, [ 'publish', 'future' ] ) ) {
-			/**
-			 * We need to determine the source of the request and act accordingly depending on if
-			 * it came in via Classic Editor, Gutenberg Editor, or REST API.
-			 */
-			if ( ! defined( 'REST_REQUEST' ) || ! REST_REQUEST ) {
-				/**
-				 * The request came via the Classic Editor or a transition post background job
-				 *
-				 *  Metadata is included in the call to wp_insert_post(), meaning that it's saved to the Post before
-				 *  we use it. So we don't need to do anything special here.
-				 *
-				 * We can just directly hook `wp_insert_post` if the post came in this way.
-				 */
-				add_action( 'wp_insert_post', [ $this, 'save_notification_from_post_id' ], 999 );
-			} else if ( $this->is_gutenberg_post( $post ) ) {
-				/**
-				 * The request came via the Gutenberg Editor.
-				 *
-				 *  If Gutenberg is being used two requests may be sent:
-				 *  - a REST API request that includes the post data and metadata registered *in* Gutenberg
-				 *  - a Legacy request including metadata registered *outside* of Gutenberg (e.g., `add_meta_box` data)
-				 *
-				 * This is where we will  define our `pushly_needs_saving` meta flag to be handled hy the
-				 * subsequent request.
-				 */
-				update_post_meta( $post->ID, 'pushly_needs_saving', 1 );
-			} else {
-				/**
-				 * The request came via the REST API.
-				 *
-				 * If this is a REST API request, we can't use the `wp_insert_post` action because any metadata
-				 * included in the REST API request is *not* included in the call to wp_insert_post(). Instead, we
-				 * can use `rest_after_insert_*` which guarantees all metadata is saved before invocation.
-				 */
-				add_action( "rest_after_insert_{$post->post_type}", [ $this, 'save_notification_from_post' ], 99, 2 );
-			}
 		}
 	}
 
@@ -440,6 +406,17 @@ class Pushly_Admin_Post {
 	public function save_notification_from_post( $post ) {
 		try {
 
+			/*
+			 * Use a transient lock to prevent race conditions when multiple requests might try to send
+			 * a notification for the same post simultaneously (e.g., Gutenberg sending multiple requests).
+			 */
+			$lock_key = "pushly_sending_{$post->ID}";
+			if ( get_transient( $lock_key ) ) {
+				Pushly_Admin_Util::log_to_event_stream( "concurrent_request", "Skipping notification send due to concurrent request already processing for post." );
+				return;
+			}
+			set_transient( $lock_key, true, 30 ); // 30 second lock
+
 			$meta = $this->get_request_post_meta( $post );
 
 			/*
@@ -456,7 +433,8 @@ class Pushly_Admin_Post {
 				// the notification box was not checked on the editor, post should be marked as not sending
 				update_post_meta( $post->ID, 'pushly_send_notification', false );
 
-				// nothing else to do, short circuit
+				// release lock before returning
+				delete_transient( $lock_key );
 				return;
 			}
 
@@ -469,7 +447,8 @@ class Pushly_Admin_Post {
 			if ( ! empty( $pushly_notification_id ) ) {
 				Pushly_Admin_Util::log_to_event_stream( "post_already_sent", "Did not send notification due to notification already being sent for post ({$pushly_notification_id})." );
 
-				// since we never pre-schedule notifications we can safely exit here
+				// release lock before returning
+				delete_transient( $lock_key );
 				return;
 			}
 
@@ -544,8 +523,13 @@ class Pushly_Admin_Post {
 			} else {
 				Pushly_Admin_Util::log_to_event_stream( "invalid_post_status", "Did not send notification due to invalid post status ({$post->post_status})." );
 			}
+
+			// Release the lock after processing
+			delete_transient( $lock_key );
 		} catch ( Exception $e ) {
 			Pushly_Admin_Util::log_to_event_stream( "unknown_exception", "Encountered unknown exception during send: {$e->getMessage()}" );
+			// Release the lock even on exception
+			delete_transient( "pushly_sending_{$post->ID}" );
 		}
 	}
 

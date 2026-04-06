@@ -4,7 +4,7 @@
  * Plugin Name:       Pushly
  * Plugin URI:        http://pushly.com
  * Description:       Provide Pushly push notification capability to WordPress installations
- * Version:           2.1.9
+ * Version:           2.1.11
  * Author:            Pushly
  * Author URI:        http://pushly.com/
  * License:           GPLv2
