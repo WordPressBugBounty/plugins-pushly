@@ -200,8 +200,11 @@ class Settings {
 				);
 			}
 
-			// Only re-encrypt if the value has actually changed
-			if ( ! empty( $current_options['api_key'] ) && $current_options['api_key'] !== $input['api_key'] ) {
+			// Encrypt the API key if it's new or has changed from the stored value.
+			// On first save, current_options['api_key'] is empty so we always encrypt.
+			// On subsequent saves, we only re-encrypt if the user entered a different key.
+			$stored_key = $current_options['api_key'] ?? '';
+			if ( empty( $stored_key ) || $stored_key !== $input['api_key'] ) {
 				$input['api_key'] = Util::encrypt_api_key(
 					$input['sdk_key'],
 					$input['sdk_key'],

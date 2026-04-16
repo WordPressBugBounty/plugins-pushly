@@ -4,7 +4,7 @@ Tags: pushly, web push, web push notifications, push notifications
 Requires at least: 6.3
 Tested up to: 6.9
 Requires PHP: 7.4
-Stable tag: 2.2.0
+Stable tag: 2.2.1
 License: GPLv2 or later
 
 Send web push notifications and in-app messages to bring readers back to your site. Built for premium publishers.
@@ -48,6 +48,9 @@ For detailed setup instructions including screenshots, see the [WordPress integr
 5. Save the form
 
 == Changelog ==
+
+= 2.2.1 =
+* Fixed an issue where the API key was not encrypted on first save
 
 = 2.2.0 =
 * Added Debug Activity Log for troubleshooting notification delivery
