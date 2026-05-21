@@ -13,8 +13,8 @@ if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {
 require_once __DIR__ . '/vendor/autoload.php';
 
 // Drop the custom activity log table.
-$log_store = new \Pushly\Admin\LogStore();
-$log_store->drop_table();
+$pushly_log_store = new \Pushly\Admin\LogStore();
+$pushly_log_store->drop_table();
 
 // Remove all plugin settings.
 delete_option( 'pushly' );

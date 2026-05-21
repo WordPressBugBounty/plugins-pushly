@@ -33,6 +33,7 @@ if ( ! defined( 'PUSHLY__K_DOMAIN' ) ) {
 }
 
 if ( ! defined( 'PUSHLY__PLUGIN_VERSION' ) ) {
-	$version_array = get_file_data( PUSHLY__DIR . '/pushly.php', [ 'Version' ], 'plugin' );
-	define( 'PUSHLY__PLUGIN_VERSION', ! empty( $version_array[0] ) ? $version_array[0] : '0.0.0' );
+	$pushly_version_array = get_file_data( PUSHLY__DIR . '/pushly.php', [ 'Version' ], 'plugin' );
+	define( 'PUSHLY__PLUGIN_VERSION', ! empty( $pushly_version_array[0] ) ? $pushly_version_array[0] : '0.0.0' );
+	unset( $pushly_version_array );
 }

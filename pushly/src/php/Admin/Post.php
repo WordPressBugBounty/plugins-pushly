@@ -4,6 +4,10 @@ namespace Pushly\Admin;
 
 use Pushly\Models\Notification;
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class Post {
 	private array $options;
 
@@ -178,7 +182,9 @@ class Post {
 		wp_enqueue_script(
 			'pushly-classic',
 			plugins_url( 'includes/admin/views/classic/meta-box.js', PUSHLY__DIR . '/pushly.php' ),
-			[ 'jquery' ]
+			[ 'jquery' ],
+			PUSHLY__PLUGIN_VERSION,
+			true
 		);
 	}
 
@@ -193,7 +199,7 @@ class Post {
 
 		add_meta_box(
 			'pushly_meta_box',
-			__( 'Pushly Notifications' ),
+			__( 'Pushly Notifications', 'pushly' ),
 			[ $this, 'build_classic_meta_box' ],
 			$this->options['enabled_post_types'],
 			'side',
@@ -211,7 +217,7 @@ class Post {
 		$custom_body                    = $meta['pushly_custom_body'] ?? null;
 
 		require_once PUSHLY__DIR . '/includes/admin/views/classic/meta-box.php';
-		echo build_classic_meta_box_html(
+		pushly_render_classic_meta_box(
 			$send_notification,
 			$customize_notification_content,
 			$custom_title,
@@ -284,7 +290,9 @@ class Post {
 
 			// Verify nonce for classic editor requests
 			if ( ! ( defined( 'REST_REQUEST' ) && REST_REQUEST ) ) {
-				$nonce = $_POST['pushly_meta_box_nonce'] ?? '';
+				$nonce = isset( $_POST['pushly_meta_box_nonce'] )
+					? sanitize_text_field( wp_unslash( $_POST['pushly_meta_box_nonce'] ) )
+					: '';
 				if ( ! wp_verify_nonce( $nonce, 'pushly_save_notification_meta_box' ) ) {
 					Util::log_to_event_stream( 'nonce_verification_failed', 'Did not send notification due to nonce verification failure.' );
 					$this->log(
@@ -457,10 +465,17 @@ class Post {
 		}
 
 		// Classic editor sends meta fields via $_POST alongside the nonce.
-		if ( empty( $meta ) && ! empty( $_POST ) ) {
-			foreach ( $_POST as $key => $value ) {
-				if ( str_starts_with( $key, 'pushly_' ) && $key !== 'pushly_meta_box_nonce' ) {
-					$meta[ $key ] = $value;
+		// Only read $_POST after verifying the meta-box nonce; otherwise the
+		// data is untrusted (and PluginCheck rightly flags an un-nonced read).
+		if ( empty( $meta ) && isset( $_POST['pushly_meta_box_nonce'] ) ) {
+			$nonce = sanitize_text_field( wp_unslash( $_POST['pushly_meta_box_nonce'] ) );
+			if ( wp_verify_nonce( $nonce, 'pushly_save_notification_meta_box' ) ) {
+				foreach ( $_POST as $key => $value ) {
+					if ( str_starts_with( $key, 'pushly_' ) && $key !== 'pushly_meta_box_nonce' ) {
+						$meta[ $key ] = is_string( $value )
+							? sanitize_text_field( wp_unslash( $value ) )
+							: map_deep( wp_unslash( $value ), 'sanitize_text_field' );
+					}
 				}
 			}
 		}
@@ -490,7 +505,11 @@ class Post {
 			&& ! empty( $meta['pushly_audience_ids'] )
 			&& is_string( $meta['pushly_audience_ids'] )
 		) {
-			$meta['pushly_audience_ids'] = unserialize( $meta['pushly_audience_ids'] );
+			// allowed_classes => false prevents PHP object injection if the input
+			// is ever attacker-controlled (defense in depth; the value reaches
+			// here only after nonce verification or from get_post_meta).
+			$decoded = unserialize( $meta['pushly_audience_ids'], [ 'allowed_classes' => false ] );
+			$meta['pushly_audience_ids'] = is_array( $decoded ) ? $decoded : [];
 		}
 
 		return $meta;

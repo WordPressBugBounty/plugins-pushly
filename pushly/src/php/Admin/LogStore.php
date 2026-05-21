@@ -6,24 +6,27 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
+/**
+ * Activity log persistence layer for the Pushly debug log.
+ *
+ * Every $wpdb call below uses $wpdb->prepare() with %i for the table identifier
+ * and explicit %s / %d placeholders for values. The WordPress.DB.DirectDatabaseQuery
+ * warnings are inherent to maintaining a custom plugin table (there is no
+ * core-function equivalent for our schema). Caching is intentionally omitted —
+ * the log is write-heavy and admin reads are paginated and infrequent.
+ *
+ * Where phpcs:ignore comments appear below they suppress false positives from
+ * static analysis that cannot trace through dynamic placeholder construction.
+ */
 class LogStore {
 
 	public const ROW_CAP = 5000;
 
 	private string $table_name;
 
-	private \wpdb $wpdb;
-
-	/**
-	 * @param \wpdb|null $wpdb Optional wpdb instance for testability.
-	 *                         Defaults to the WordPress global $wpdb when null.
-	 */
-	public function __construct( ?\wpdb $wpdb = null ) {
-		if ( $wpdb === null ) {
-			global $wpdb;
-		}
-		$this->wpdb       = $wpdb;
-		$this->table_name = $this->wpdb->prefix . 'pushly_activity_log';
+	public function __construct() {
+		global $wpdb;
+		$this->table_name = $wpdb->prefix . 'pushly_activity_log';
 	}
 
 	/**
@@ -31,7 +34,8 @@ class LogStore {
 	 * Called on plugin activation.
 	 */
 	public function create_table(): void {
-		$charset_collate = $this->wpdb->get_charset_collate();
+		global $wpdb;
+		$charset_collate = $wpdb->get_charset_collate();
 
 		$sql = "CREATE TABLE {$this->table_name} (
 			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
@@ -55,7 +59,9 @@ class LogStore {
 	 * Called on plugin uninstall.
 	 */
 	public function drop_table(): void {
-		$this->wpdb->query( "DROP TABLE IF EXISTS {$this->table_name}" );
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.DirectDatabaseQuery.SchemaChange -- Plugin-owned table; DDL on uninstall has no cache to invalidate.
+		$wpdb->query( $wpdb->prepare( 'DROP TABLE IF EXISTS %i', $this->table_name ) );
 	}
 
 	/**
@@ -70,6 +76,8 @@ class LogStore {
 		}
 
 		$this->enforce_row_cap( count( $entries ) );
+
+		global $wpdb;
 
 		$placeholders = [];
 		$values       = [];
@@ -95,11 +103,10 @@ class LogStore {
 			$values[] = $context;
 		}
 
-		$sql = "INSERT INTO {$this->table_name} (timestamp, severity, event_type, message, post_id, context) VALUES "
-			. implode( ', ', $placeholders );
+		$sql = 'INSERT INTO %i (timestamp, severity, event_type, message, post_id, context) VALUES ' . implode( ', ', $placeholders );
 
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders built above
-		$this->wpdb->query( $this->wpdb->prepare( $sql, $values ) );
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $sql is built from literal SQL plus a generated list of '(%s, %s, %s, %s, %s, %s)' tuples; all dynamic values flow through %i / %s placeholders.
+		$wpdb->query( $wpdb->prepare( $sql, array_merge( [ $this->table_name ], $values ) ) );
 	}
 
 	/**
@@ -116,64 +123,51 @@ class LogStore {
 			return;
 		}
 
+		global $wpdb;
+
 		// Fetch the oldest IDs into PHP first, then delete.
 		// This avoids MySQL's restriction on referencing the target table
 		// in a subquery of a DELETE statement (which also fails on temporary tables).
-		$ids = $this->wpdb->get_col(
-			$this->wpdb->prepare(
-				"SELECT id FROM {$this->table_name} ORDER BY timestamp ASC, id ASC LIMIT %d",
-				$overflow
-			)
-		);
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Plugin-owned table; bounded read used to compute deletions, not for display.
+		$ids = $wpdb->get_col( $wpdb->prepare( 'SELECT id FROM %i ORDER BY timestamp ASC, id ASC LIMIT %d', $this->table_name, $overflow ) );
 
 		if ( empty( $ids ) ) {
 			return;
 		}
 
-		$placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared -- dynamic placeholders built above
-		$this->wpdb->query(
-			$this->wpdb->prepare(
-				"DELETE FROM {$this->table_name} WHERE id IN ({$placeholders})",
-				$ids
-			)
-		);
+		$id_placeholders = implode( ', ', array_fill( 0, count( $ids ), '%d' ) );
+		$sql             = "DELETE FROM %i WHERE id IN ({$id_placeholders})";
+
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQL.InterpolatedNotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare -- $id_placeholders contains only '%d' tokens; every dynamic value flows through prepare().
+		$wpdb->query( $wpdb->prepare( $sql, array_merge( [ $this->table_name ], $ids ) ) );
 	}
 
 	/**
 	 * Queries log entries with pagination, severity filter, and text search.
 	 *
-	 * @param int         $page       Page number (1-based).
-	 * @param int         $per_page   Entries per page.
+	 * @param int           $page       Page number (1-based).
+	 * @param int           $per_page   Entries per page.
 	 * @param string[]|null $severities Filter by severity levels.
-	 * @param string|null $search     Text search against message and event_type.
+	 * @param string|null   $search     Text search against message and event_type.
 	 *
 	 * @return array{entries: array, total: int, page: int, per_page: int, total_pages: int}
 	 */
 	public function query( int $page = 1, int $per_page = 50, ?array $severities = null, ?string $search = null ): array {
+		global $wpdb;
+
 		$where  = $this->build_where_clause( $severities, $search );
 		$values = $this->build_where_values( $severities, $search );
 
-		// Count total matching entries.
-		$count_sql = "SELECT COUNT(*) FROM {$this->table_name}" . $where;
-		if ( ! empty( $values ) ) {
-			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-			$total = (int) $this->wpdb->get_var( $this->wpdb->prepare( $count_sql, $values ) );
-		} else {
-			// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-			$total = (int) $this->wpdb->get_var( $count_sql );
-		}
+		$count_sql = 'SELECT COUNT(*) FROM %i' . $where;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $where is built from literal SQL with hard-coded %s placeholders generated in build_where_clause(); all values flow through prepare().
+		$total = (int) $wpdb->get_var( $wpdb->prepare( $count_sql, array_merge( [ $this->table_name ], $values ) ) );
 
 		$total_pages = $total > 0 ? (int) ceil( $total / $per_page ) : 0;
 		$offset      = ( $page - 1 ) * $per_page;
 
-		// Fetch entries for the requested page.
-		$query_sql = "SELECT * FROM {$this->table_name}" . $where
-			. " ORDER BY timestamp DESC, id DESC LIMIT %d OFFSET %d";
-
-		$query_values   = array_merge( $values, [ $per_page, $offset ] );
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		$entries = $this->wpdb->get_results( $this->wpdb->prepare( $query_sql, $query_values ) );
+		$query_sql = 'SELECT * FROM %i' . $where . ' ORDER BY timestamp DESC, id DESC LIMIT %d OFFSET %d';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $where placeholders are literal; replacement count is correct at runtime (table + where-values + limit + offset).
+		$entries = $wpdb->get_results( $wpdb->prepare( $query_sql, array_merge( [ $this->table_name ], $values, [ $per_page, $offset ] ) ) );
 
 		return [
 			'entries'     => $entries ?: [],
@@ -194,15 +188,14 @@ class LogStore {
 	 * @return array<int, object>
 	 */
 	public function query_all( ?array $severities = null, ?string $search = null ): array {
+		global $wpdb;
+
 		$where  = $this->build_where_clause( $severities, $search );
 		$values = $this->build_where_values( $severities, $search );
 
-		$sql = "SELECT * FROM {$this->table_name}" . $where
-			. " ORDER BY timestamp DESC, id DESC LIMIT %d";
-
-		$query_values = array_merge( $values, [ self::ROW_CAP ] );
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		$entries = $this->wpdb->get_results( $this->wpdb->prepare( $sql, $query_values ) );
+		$sql = 'SELECT * FROM %i' . $where . ' ORDER BY timestamp DESC, id DESC LIMIT %d';
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching,WordPress.DB.PreparedSQL.NotPrepared,WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare,WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber,PluginCheck.Security.DirectDB.UnescapedDBParameter -- $where placeholders are literal; replacement count is correct at runtime (table + where-values + limit).
+		$entries = $wpdb->get_results( $wpdb->prepare( $sql, array_merge( [ $this->table_name ], $values, [ self::ROW_CAP ] ) ) );
 
 		return $entries ?: [];
 	}
@@ -211,27 +204,27 @@ class LogStore {
 	 * Returns the total number of log entries.
 	 */
 	public function count(): int {
-		// phpcs:ignore WordPress.DB.PreparedSQL.NotPrepared
-		return (int) $this->wpdb->get_var( "SELECT COUNT(*) FROM {$this->table_name}" );
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Plugin-owned table count; result is paired with row-cap enforcement on the next write.
+		return (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $this->table_name ) );
 	}
 
 	/**
 	 * Deletes all log entries.
 	 */
 	public function truncate(): void {
-		$this->wpdb->query( "DELETE FROM {$this->table_name}" );
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Plugin-owned table; admin-triggered "clear log" action.
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM %i', $this->table_name ) );
 	}
 
 	/**
 	 * Deletes entries older than 14 days. Called by WP-Cron.
 	 */
 	public function prune_old_entries(): void {
-		$this->wpdb->query(
-			$this->wpdb->prepare(
-				"DELETE FROM {$this->table_name} WHERE timestamp < %s",
-				gmdate( 'Y-m-d H:i:s', time() - ( 14 * DAY_IN_SECONDS ) )
-			)
-		);
+		global $wpdb;
+		// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery,WordPress.DB.DirectDatabaseQuery.NoCaching -- Plugin-owned table; scheduled WP-Cron prune.
+		$wpdb->query( $wpdb->prepare( 'DELETE FROM %i WHERE timestamp < %s', $this->table_name, gmdate( 'Y-m-d H:i:s', time() - ( 14 * DAY_IN_SECONDS ) ) ) );
 	}
 
 	/**
@@ -243,6 +236,9 @@ class LogStore {
 
 	/**
 	 * Builds the WHERE clause for query and query_all.
+	 *
+	 * Returns a string containing only literal SQL and hard-coded %s placeholders —
+	 * never user input. Safe to concatenate into a prepared SQL string.
 	 *
 	 * @param string[]|null $severities Severity filter.
 	 * @param string|null   $search     Text search string.
@@ -277,6 +273,8 @@ class LogStore {
 	 * @return array<int, string> Values for wpdb::prepare().
 	 */
 	private function build_where_values( ?array $severities, ?string $search ): array {
+		global $wpdb;
+
 		$values = [];
 
 		if ( ! empty( $severities ) ) {
@@ -286,7 +284,7 @@ class LogStore {
 		}
 
 		if ( ! empty( $search ) ) {
-			$like     = '%' . $this->wpdb->esc_like( $search ) . '%';
+			$like     = '%' . $wpdb->esc_like( $search ) . '%';
 			$values[] = $like;
 			$values[] = $like;
 		}

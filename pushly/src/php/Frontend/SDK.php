@@ -2,6 +2,10 @@
 
 namespace Pushly\Frontend;
 
+if ( ! defined( 'ABSPATH' ) ) {
+	exit;
+}
+
 class SDK {
 	public function register_hooks(): void {
 		add_action( 'wp_head', [ $this, 'insert_header' ], 10 );
@@ -32,12 +36,12 @@ class SDK {
 			'pushly-sdk',
 			'https://' . PUSHLY__SDK_DOMAIN . '/pushly-sdk.min.js?domain_key=' . rawurlencode( $sdk_key ),
 			[],
-			false,
+			PUSHLY__PLUGIN_VERSION,
 			true
 		);
 
 		require_once PUSHLY__DIR . '/includes/public/views/sdk.php';
-		echo build_sdk( $sdk_key, PUSHLY__PLUGIN_DIR );
+		pushly_render_sdk_snippet( $sdk_key, PUSHLY__PLUGIN_DIR );
 	}
 
 	public function async_enqueue( string $tag, string $handle ): string {
