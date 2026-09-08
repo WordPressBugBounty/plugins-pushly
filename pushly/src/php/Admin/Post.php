@@ -139,6 +139,17 @@ class Post {
 					],
 				],
 			] );
+
+			register_post_meta( $post_type, 'pushly_excluded_audience_ids', [
+				'single'       => true,
+				'type'         => 'array',
+				'show_in_rest' => [
+					'schema' => [
+						'type'  => 'array',
+						'items' => [ 'type' => 'integer' ],
+					],
+				],
+			] );
 		}
 	}
 
@@ -369,10 +380,18 @@ class Post {
 				$body  = null;
 			}
 
-			// Resolve audience
+			// Resolve audience. Targeting and exclusions are independent: either may be
+			// left empty, so excluding segments without targeting any sends to all
+			// subscribers minus the excluded ones.
 			$notification_meta = [];
-			if ( ! empty( $meta['pushly_customize_audience'] ) && ! empty( $meta['pushly_audience_ids'] ) ) {
-				$notification_meta['segment_ids'] = $meta['pushly_audience_ids'];
+			if ( ! empty( $meta['pushly_customize_audience'] ) ) {
+				if ( ! empty( $meta['pushly_audience_ids'] ) ) {
+					$notification_meta['segment_ids'] = $meta['pushly_audience_ids'];
+				}
+
+				if ( ! empty( $meta['pushly_excluded_audience_ids'] ) ) {
+					$notification_meta['excluded_segment_ids'] = $meta['pushly_excluded_audience_ids'];
+				}
 			}
 
 			$payload = [
@@ -491,6 +510,7 @@ class Post {
 				'pushly_custom_body',
 				'pushly_customize_audience',
 				'pushly_audience_ids',
+				'pushly_excluded_audience_ids',
 			];
 
 			foreach ( $keys as $key ) {
@@ -501,15 +521,18 @@ class Post {
 			}
 		}
 
-		if ( ! empty( $meta['pushly_customize_audience'] )
-			&& ! empty( $meta['pushly_audience_ids'] )
-			&& is_string( $meta['pushly_audience_ids'] )
-		) {
-			// allowed_classes => false prevents PHP object injection if the input
-			// is ever attacker-controlled (defense in depth; the value reaches
-			// here only after nonce verification or from get_post_meta).
-			$decoded = unserialize( $meta['pushly_audience_ids'], [ 'allowed_classes' => false ] );
-			$meta['pushly_audience_ids'] = is_array( $decoded ) ? $decoded : [];
+		if ( ! empty( $meta['pushly_customize_audience'] ) ) {
+			foreach ( [ 'pushly_audience_ids', 'pushly_excluded_audience_ids' ] as $audience_key ) {
+				if ( empty( $meta[ $audience_key ] ) || ! is_string( $meta[ $audience_key ] ) ) {
+					continue;
+				}
+
+				// allowed_classes => false prevents PHP object injection if the input
+				// is ever attacker-controlled (defense in depth; the value reaches
+				// here only after nonce verification or from get_post_meta).
+				$decoded               = unserialize( $meta[ $audience_key ], [ 'allowed_classes' => false ] );
+				$meta[ $audience_key ] = is_array( $decoded ) ? $decoded : [];
+			}
 		}
 
 		return $meta;

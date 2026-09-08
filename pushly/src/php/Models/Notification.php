@@ -65,6 +65,10 @@ class Notification implements \JsonSerializable {
 				$notification->audience->segment_ids = array_map( 'intval', $pushly_meta['segment_ids'] );
 			}
 
+			if ( ! empty( $pushly_meta['excluded_segment_ids'] ) ) {
+				$notification->audience->excluded_segment_ids = array_map( 'intval', $pushly_meta['excluded_segment_ids'] );
+			}
+
 			// Template
 			$channels              = new NotificationTemplateChannels();
 			$channels->web         = new NotificationTemplateChannelsWeb();

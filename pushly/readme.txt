@@ -2,9 +2,9 @@
 Contributors: pushlydev
 Tags: pushly, web push, web push notifications, push notifications
 Requires at least: 6.3
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 2.3.0
+Stable tag: 2.4.0
 License: GPLv2 or later
 
 Send web push notifications and in-app messages to bring readers back to your site. Built for premium publishers.
@@ -48,6 +48,11 @@ For detailed setup instructions including screenshots, see the [WordPress integr
 5. Save the form
 
 == Changelog ==
+
+= 2.4.0 =
+* Added the ability to exclude segments from a notification's audience
+* Added placeholder text to the audience fields showing what an empty selection means
+* Certified compatibility with WordPress 7.1
 
 = 2.3.0 =
 * Certified compatibility with WordPress 7.0

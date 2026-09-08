@@ -11,7 +11,7 @@
     "brain/monkey": "^2.6",
     "mockery/mockery": "^1.6",
     "wp-phpunit/wp-phpunit": "^6.5",
-    "roots/wordpress-no-content": "^7.0",
+    "roots/wordpress-no-content": "^7.1",
     "yoast/phpunit-polyfills": "^2.0"
   },
   "autoload": {

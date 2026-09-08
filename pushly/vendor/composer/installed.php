@@ -3,7 +3,7 @@
         'name' => 'pushly/pushly-wordpress-plugin',
         'pretty_version' => 'dev-master',
         'version' => 'dev-master',
-        'reference' => 'bcb07e10c34596f82485e8c087801103bf786cd8',
+        'reference' => '022320c65f25bf2900276cb5651145fa52b49ffa',
         'type' => 'wordpress-plugin',
         'install_path' => __DIR__ . '/../../',
         'aliases' => array(),
@@ -13,7 +13,7 @@
         'pushly/pushly-wordpress-plugin' => array(
             'pretty_version' => 'dev-master',
             'version' => 'dev-master',
-            'reference' => 'bcb07e10c34596f82485e8c087801103bf786cd8',
+            'reference' => '022320c65f25bf2900276cb5651145fa52b49ffa',
             'type' => 'wordpress-plugin',
             'install_path' => __DIR__ . '/../../',
             'aliases' => array(),
